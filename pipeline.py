@@ -29,8 +29,11 @@ Usage examples:
 
 import json
 import logging
+import sys
 import time
 from datetime import date, datetime, timezone
+
+from botocore.exceptions import ClientError
 
 import config
 from pipeline_types import PipelineRecord
@@ -38,6 +41,7 @@ from roboflow_uploader import upload
 from s3_loader import list_image_keys, load_image, upload_log_to_s3
 from utils import (
     LOG_PATH,
+    _extract_dealership,
     _load_processed,
     _log,
     _make_log_path,
@@ -83,7 +87,7 @@ def run(
 
     # Batch name: <dealership>_<date_from>_<date_to>
     # e.g. castle_hill_toyota_2026-05-12_2026-05-16
-    dealership    = bucket.removeprefix("prod-").replace("-", "_")
+    dealership    = _extract_dealership(bucket)
     date_from_str = date_from.strftime("%Y-%m-%d")
     date_to_str   = date_to.strftime("%Y-%m-%d")
     batch_name    = f"{dealership}_{date_from_str}_{date_to_str}"
@@ -103,12 +107,25 @@ def run(
     logger.info("%s\n", "=" * 62)
 
     # ── Fetch image list (read-only) ──────────────────────────────────
-    keys      = list_image_keys(
-        date_from=date_from,
-        date_to=date_to,
-        bucket=bucket,
-        target_subfolders=subfolders,
-    )
+    try:
+        keys = list_image_keys(
+            date_from=date_from,
+            date_to=date_to,
+            bucket=bucket,
+            target_subfolders=subfolders,
+        )
+    except RuntimeError as e:
+        logger.error("[pipeline] ❌ Credential error for bucket '%s': %s", bucket, e)
+        logger.error("[pipeline]    Skipping this dealership.")
+        return
+    except ClientError as e:
+        logger.error(
+            "[pipeline] ❌ S3 access error for bucket '%s': %s", bucket,
+            e.response["Error"].get("Message", e),
+        )
+        logger.error("[pipeline]    Skipping this dealership.")
+        return
+
     processed = _load_processed(log_path)
     pending   = [k for k in keys if k not in processed]
 
@@ -255,11 +272,15 @@ if __name__ == "__main__":
         if args.subfolders
         else None
     )
-    run(
-        date_from         = args.date_from,
-        date_to           = args.date_to,
-        target_subfolders = subfolders,
-        bucket            = args.bucket,
-        limit             = args.limit,
-        dry_run           = args.dry_run,
-    )
+    try:
+        run(
+            date_from         = args.date_from,
+            date_to           = args.date_to,
+            target_subfolders = subfolders,
+            bucket            = args.bucket,
+            limit             = args.limit,
+            dry_run           = args.dry_run,
+        )
+    except Exception as e:
+        logger.error("[pipeline] ❌ Unexpected error: %s", e)
+        sys.exit(1)

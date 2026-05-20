@@ -33,10 +33,42 @@ echo [2/2] prod-worthington-bmw >> "%LOGFILE%"
 python pipeline.py --bucket prod-worthington-bmw --limit 1000 >> "%LOGFILE%" 2>&1
 echo Exit code: %ERRORLEVEL% >> "%LOGFILE%"
 
-:: Add more dealerships here, e.g.:
-:: echo [2/2] prod-chatswood-toyota >> "%LOGFILE%"
-:: python pipeline.py --bucket prod-chatswood-toyota >> "%LOGFILE%" 2>&1
-:: echo Exit code: %ERRORLEVEL% >> "%LOGFILE%"
+echo [3/3] prod-audi-artarmon-live >> "%LOGFILE%"
+python pipeline.py --bucket prod-audi-artarmon-live --limit 1000 >> "%LOGFILE%" 2>&1
+echo Exit code: %ERRORLEVEL% >> "%LOGFILE%"
+
+echo [4/4] prod-hornsby >> "%LOGFILE%"
+python pipeline.py --bucket prod-hornsby --limit 1000 >> "%LOGFILE%" 2>&1
+echo Exit code: %ERRORLEVEL% >> "%LOGFILE%"
+
+echo [5/5] prod-mercedes-benz-stockport >> "%LOGFILE%"
+python pipeline.py --bucket prod-mercedes-benz-stockport --limit 1000 >> "%LOGFILE%" 2>&1
+echo Exit code: %ERRORLEVEL% >> "%LOGFILE%"
+
+echo [6/6] prod-northshore-bmw >> "%LOGFILE%"
+python pipeline.py --bucket prod-northshore-bmw --limit 1000 >> "%LOGFILE%" 2>&1
+echo Exit code: %ERRORLEVEL% >> "%LOGFILE%"
+
+echo [7/7] prod-sydney-bmw >> "%LOGFILE%"
+python pipeline.py --bucket prod-sydney-bmw --limit 1000 >> "%LOGFILE%" 2>&1
+echo Exit code: %ERRORLEVEL% >> "%LOGFILE%"
+
+echo [8/8] prod-motorline-bmw >> "%LOGFILE%"
+python pipeline.py --bucket prod-motorline-bmw --limit 1000 >> "%LOGFILE%" 2>&1
+echo Exit code: %ERRORLEVEL% >> "%LOGFILE%"
+
+echo [9/9] cmt-prod-ap-southeast-2-mercedes-benz-melbourne >> "%LOGFILE%"
+python pipeline.py --bucket cmt-prod-ap-southeast-2-mercedes-benz-melbourne --limit 1000 >> "%LOGFILE%" 2>&1
+echo Exit code: %ERRORLEVEL% >> "%LOGFILE%"
+
+echo [10/10] cmt-prod-ap-southeast-2-melbourne-bmw >> "%LOGFILE%"
+python pipeline.py --bucket cmt-prod-ap-southeast-2-melbourne-bmw --limit 1000 >> "%LOGFILE%" 2>&1
+echo Exit code: %ERRORLEVEL% >> "%LOGFILE%"
+
+echo [11/11] cmt-prod-ap-southeast-2-melton-toyota >> "%LOGFILE%"
+python pipeline.py --bucket cmt-prod-ap-southeast-2-melton-toyota --limit 1000 >> "%LOGFILE%" 2>&1
+echo Exit code: %ERRORLEVEL% >> "%LOGFILE%"
+
 
 echo. >> "%LOGFILE%"
 echo ============================================================ >> "%LOGFILE%"

@@ -55,8 +55,7 @@ For EACH YOLO prediction, reason explicitly before deciding:
        YES or UNCERTAIN → include in corrections:
            · looks like surface damage    → class "scratch"
            · does not look like surface damage → class "other"
-       CLEARLY NO (box is on road surface, open air, background structure,
-                   or a person — with no vehicle panel visible at all) → discard
+       CLEARLY NO (box is on road surface, open air, background structure, or a person — with no vehicle panel visible at all) → discard
 
 Then scan the full image for any surface damage YOLO missed; add each as class "scratch".
 
@@ -65,9 +64,7 @@ DECISION RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   scratch — corrections contains at least one "scratch" box
   other   — corrections contains at least one box and none are "scratch"
-  null    — corrections is empty because every prediction was CLEARLY off the vehicle
-            body entirely, OR the image is completely unassessable (pitch-black /
-            extreme blur / pure-white overexposure).
+  null    — corrections is empty because every prediction was CLEARLY off the vehicle body entirely, OR the image is completely unassessable (pitch-black / extreme blur / pure-white overexposure).
 
   ⛔ null is NOT permitted when:
      • Any YOLO prediction overlaps any vehicle panel surface, even partially

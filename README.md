@@ -23,12 +23,21 @@ The pipeline **never writes to the production bucket.** Log uploads go to `LOG_B
 ## S3 Structure
 
 ```
-prod-castle-hill-toyota/
+<bucket>/
 └── prior_condition/
     └── SCANNER_A_{device}_{YYYY-MM-DD}_{time}/
         ├── 3/   ← included (left camera)
         └── 7/   ← included (right camera)
 ```
+
+Two bucket naming conventions are supported:
+
+| Format | Example |
+|--------|---------|
+| `prod-{dealership}` | `prod-castle-hill-toyota` |
+| `cmt-prod-{region}-{dealership}` | `cmt-prod-ap-southeast-2-mercedes-benz-melbourne` |
+
+The pipeline strips the prefix automatically to derive the dealership name used in batch names and image filenames.
 
 ---
 
@@ -152,11 +161,11 @@ left off — already-processed images are skipped automatically.
 The Roboflow batch name is derived from the bucket and date range:
 
 ```
-prod-castle-hill-toyota  +  2026-05-12 → 2026-05-16
-→  castle_hill_toyota_2026-05-12_2026-05-16
+prod-castle-hill-toyota              →  castle_hill_toyota_2026-05-12_2026-05-16
+cmt-prod-ap-southeast-2-melton-toyota  →  melton_toyota_2026-05-12_2026-05-16
 ```
 
-The `prod-` prefix is stripped and hyphens become underscores.
+The cloud/region prefix is stripped and hyphens become underscores.
 
 ---
 
@@ -183,6 +192,10 @@ All settings live in `config.py`, loaded from `.env` via `python-dotenv`.
 | `ROBOFLOW_API_KEY` | Roboflow API key |
 | `ROBOFLOW_WORKSPACE` | Roboflow workspace slug |
 | `ROBOFLOW_PROJECT` | Roboflow project slug |
+| `BUCKET_KEY_<BUCKET>` | AWS access key ID for a specific bucket (e.g. `BUCKET_KEY_PROD_CASTLE_HILL_TOYOTA`) |
+| `BUCKET_SECRET_<BUCKET>` | AWS secret access key for a specific bucket |
+| `BUCKET_SECRET_ID_<BUCKET>` | Name of an existing Secrets Manager secret to use for a bucket |
+| `SECRET_PREFIX` | Secrets Manager path prefix for auto-named secrets (default `pipeline/buckets/`) |
 | `EC2_SELF_STOP` | `true` to stop the EC2 instance after the run |
 | `EC2_INSTANCE_ID` | Instance ID for self-stop |
 | `AWS_REGION` | AWS region for EC2/SNS (default `ap-southeast-2`) |
@@ -222,6 +235,38 @@ After the loop completes:
 
 ---
 
+## Automated Multi-Dealership Runs
+
+**`run_pipeline.bat`** runs the pipeline for every dealership in sequence.
+Each dealership is a separate `python pipeline.py` invocation — if one fails
+(bad credentials, access denied), it logs the error and continues to the next.
+
+To add or remove a dealership, edit the list in `run_pipeline.bat`:
+```bat
+echo [9/9] cmt-prod-ap-southeast-2-mercedes-benz-melbourne >> "%LOGFILE%"
+python pipeline.py --bucket cmt-prod-ap-southeast-2-mercedes-benz-melbourne --limit 1000 >> "%LOGFILE%" 2>&1
+echo Exit code: %ERRORLEVEL% >> "%LOGFILE%"
+```
+
+**`setup_scheduler.ps1`** registers the bat file as a Windows Task Scheduler job.
+Run it once as Administrator, then re-run whenever you change the schedule:
+
+```powershell
+# Edit the variables at the top of the file first:
+$RunDay   = "Friday"    # day of the week
+$RunTime  = "17:00"     # 24h format
+$MaxHours = 24          # kill the task if it runs longer than this
+
+# Then run as Administrator:
+cd C:\ai-train\roboflow_pipeline
+.\setup_scheduler.ps1
+```
+
+The script removes the existing task and registers a fresh one — no need to
+touch Task Scheduler manually. Logs are saved to `logs\scheduler\`.
+
+---
+
 ## Running Tests
 
 ```bash
@@ -234,6 +279,43 @@ pytest test/ -v --cov=. --cov-report=term-missing
 # Single module
 pytest test/test_s3_loader.py -v
 ```
+
+---
+
+## Per-Bucket Credentials
+
+Some dealership buckets need their own IAM credentials. The pipeline resolves credentials
+per bucket in this order:
+
+| Priority | Method | How to configure |
+|----------|--------|-----------------|
+| 1 | Direct `.env` vars | `BUCKET_KEY_<BUCKET>` + `BUCKET_SECRET_<BUCKET>` |
+| 2 | Existing Secrets Manager secret by name | `BUCKET_SECRET_ID_<BUCKET>=your/secret/name` |
+| 3 | Auto-named Secrets Manager secret | Store secret at `{SECRET_PREFIX}{bucket}` |
+| 4 | Default | `aws configure` shared credentials |
+
+`<BUCKET>` is the bucket name uppercased with hyphens replaced by underscores:
+`cmt-prod-ap-southeast-2-melton-toyota` → `CMT_PROD_AP_SOUTHEAST_2_MELTON_TOYOTA`
+
+Sessions are cached per bucket — credentials are only resolved once per run.
+
+**Option 1 — paste credentials directly into `.env` (simplest):**
+```bash
+BUCKET_KEY_CMT_PROD_AP_SOUTHEAST_2_MELTON_TOYOTA=AKIA...
+BUCKET_SECRET_CMT_PROD_AP_SOUTHEAST_2_MELTON_TOYOTA=...
+```
+
+**Option 2 — point to an existing Secrets Manager secret:**
+```bash
+BUCKET_SECRET_ID_CMT_PROD_AP_SOUTHEAST_2_MELTON_TOYOTA=your/existing/secret/name
+```
+
+The secret value must be JSON with keys `AccessKeyId` + `SecretAccessKey`
+(or `aws_access_key_id` + `aws_secret_access_key` — both formats are accepted).
+
+**Error behaviour:** if a bucket has explicit credentials configured but they fail
+(wrong secret name, missing IAM permission), the pipeline logs a clear error and
+skips that dealership rather than crashing the entire run.
 
 ---
 

@@ -20,6 +20,22 @@ logger = logging.getLogger(__name__)
 LOG_PATH = Path(f"logs/pipeline_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.jsonl")
 
 
+# ── Bucket helpers ───────────────────────────────────────────────────
+
+def _extract_dealership(bucket: str) -> str:
+    """
+    Extract a clean dealership identifier from a bucket name.
+
+    Handles two naming conventions:
+      Old: prod-worthington-bmw               → worthington_bmw
+      New: cmt-prod-ap-southeast-2-melton-toyota → melton_toyota
+    """
+    new_prefix = f"cmt-prod-{config.AWS_REGION}-"
+    if bucket.startswith(new_prefix):
+        return bucket.removeprefix(new_prefix).replace("-", "_")
+    return bucket.removeprefix("prod-").replace("-", "_")
+
+
 # ── CLI ───────────────────────────────────────────────────────────────
 
 def _parse_date_arg(value: str) -> date:

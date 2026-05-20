@@ -20,10 +20,14 @@ from PIL import Image
 from PIL.Image import Image as PilImage
 
 import config
+from credentials import get_session
 
 logger = logging.getLogger(__name__)
 
-s3 = boto3.client("s3", region_name=config.AWS_REGION)
+
+def _get_client(bucket: str):
+    """Return an S3 client using the appropriate credentials for the given bucket."""
+    return get_session(bucket).client("s3", region_name=config.AWS_REGION)
 
 # ── Session folder parsing ────────────────────────────────────────────
 # Matches folder names like: SCANNER_A_0009bf_2026-03-16_14-10-49
@@ -107,6 +111,7 @@ def list_image_keys(
     logger.info("[s3] Date range     : %s → %s", date_from, date_to)
     logger.info("[s3] Camera angles  : subfolders %s", sorted(target_subfolders))
 
+    s3 = _get_client(bucket)
     paginator = s3.get_paginator("list_objects_v2")
 
     # Pass 1: list session folders only (Delimiter avoids descending into objects).
@@ -158,7 +163,7 @@ def list_image_keys(
 
 
 def _print_session_summary(keys: list[str]) -> None:
-    """Log a grouped count of matched S3 keys by session folder and subfolder."""
+    """Log high-level session statistics."""
     if not keys:
         return
     sessions: dict = defaultdict(lambda: defaultdict(int))
@@ -167,11 +172,16 @@ def _print_session_summary(keys: list[str]) -> None:
         if session:
             sessions[session][subfolder] += 1
 
-    logger.info("[s3] Session summary:")
-    for session in sorted(sessions):
-        logger.info("  📁 %s", session)
-        for sf in sorted(sessions[session]):
-            logger.info("       subfolder %s: %d images", sf, sessions[session][sf])
+    subfolder_totals: dict[str, int] = defaultdict(int)
+    for subfolders in sessions.values():
+        for sf, count in subfolders.items():
+            subfolder_totals[sf] += count
+
+    logger.info(
+        "[s3] Sessions: %d  |  Images per subfolder: %s",
+        len(sessions),
+        "  ".join(f"{sf}={count}" for sf, count in sorted(subfolder_totals.items())),
+    )
     logger.info("")
 
 
@@ -188,7 +198,7 @@ def load_image(key: str, bucket: str = config.S3_BUCKET) -> tuple[PilImage, str,
     Returns:
         (pil_image, base64_str, media_type)
     """
-    obj  = s3.get_object(Bucket=bucket, Key=key)
+    obj  = _get_client(bucket).get_object(Bucket=bucket, Key=key)
     raw  = obj["Body"].read()
     ext  = key.lower().rsplit(".", 1)[-1]
     mime = "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}"
@@ -244,7 +254,7 @@ def upload_log_to_s3(local_path: str) -> None:
         return
 
     try:
-        s3.upload_file(local_path, config.LOG_BUCKET, config.LOG_S3_KEY)
+        _get_client(config.LOG_BUCKET).upload_file(local_path, config.LOG_BUCKET, config.LOG_S3_KEY)
         logger.info(
             "[s3] Log uploaded → s3://%s/%s", config.LOG_BUCKET, config.LOG_S3_KEY
         )

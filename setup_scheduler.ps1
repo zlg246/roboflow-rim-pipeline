@@ -10,7 +10,7 @@
 # ============================================================
 
 # ── CONFIGURE THESE ──────────────────────────────────────────
-$RunDay      = "Tuesday"   # Monday / Tuesday / Wednesday / Thursday / Friday / Saturday / Sunday
+$RunDay      = "Wednesday"   # Monday / Tuesday / Wednesday / Thursday / Friday / Saturday / Sunday
 $RunTime     = "17:00"    # 24h format: "17:00" = 5pm  "09:00" = 9am  "08:30" = 8:30am
 $MaxHours    = 24         # Maximum hours the pipeline is allowed to run before being killed
 # ─────────────────────────────────────────────────────────────
