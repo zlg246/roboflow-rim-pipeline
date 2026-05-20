@@ -124,7 +124,7 @@ def run(
         return
 
     stats: dict[str, int] = {
-        d: 0 for d in ("correct", "partial", "missed", "other", "null", "bad_quality", "error")
+        d: 0 for d in ("scratch", "other", "null", "error")
     }
     uploaded:      int = 0
     null_reviewed: int = 0

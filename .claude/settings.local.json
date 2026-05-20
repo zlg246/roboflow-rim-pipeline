@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/home/li/miniconda3/envs/scanner/bin/python -m pytest test/test_vision_verifier.py test/test_pipeline_integration.py -q)",
+      "Bash(/home/li/miniconda3/envs/scanner/bin/python -m pytest test/test_s3_loader.py -q)"
+    ]
+  }
+}
