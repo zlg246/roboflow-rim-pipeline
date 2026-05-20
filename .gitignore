@@ -1,0 +1,28 @@
+# Logs
+logs/
+*.log
+
+# Null review output
+null_review/
+
+# Cache
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+*.pyd
+.cache/
+
+# PyTorch model files
+*.pt
+*.pth
+*.ckpt
+
+# Environment variables
+.env
+
+# VS Code
+.vscode/
+
+# Claude Code internal
+.claude/
