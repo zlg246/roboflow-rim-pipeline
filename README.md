@@ -194,8 +194,6 @@ All settings live in `config.py`, loaded from `.env` via `python-dotenv`.
 | `ROBOFLOW_PROJECT` | Roboflow project slug |
 | `BUCKET_KEY_<BUCKET>` | AWS access key ID for a specific bucket (e.g. `BUCKET_KEY_PROD_CASTLE_HILL_TOYOTA`) |
 | `BUCKET_SECRET_<BUCKET>` | AWS secret access key for a specific bucket |
-| `BUCKET_SECRET_ID_<BUCKET>` | Name of an existing Secrets Manager secret to use for a bucket |
-| `SECRET_PREFIX` | Secrets Manager path prefix for auto-named secrets (default `pipeline/buckets/`) |
 | `EC2_SELF_STOP` | `true` to stop the EC2 instance after the run |
 | `EC2_INSTANCE_ID` | Instance ID for self-stop |
 | `AWS_REGION` | AWS region for EC2/SNS (default `ap-southeast-2`) |
@@ -284,38 +282,21 @@ pytest test/test_s3_loader.py -v
 
 ## Per-Bucket Credentials
 
-Some dealership buckets need their own IAM credentials. The pipeline resolves credentials
-per bucket in this order:
+Some dealership buckets need their own IAM credentials. Add a pair of vars to `.env`
+using the bucket name uppercased with hyphens replaced by underscores:
 
-| Priority | Method | How to configure |
-|----------|--------|-----------------|
-| 1 | Direct `.env` vars | `BUCKET_KEY_<BUCKET>` + `BUCKET_SECRET_<BUCKET>` |
-| 2 | Existing Secrets Manager secret by name | `BUCKET_SECRET_ID_<BUCKET>=your/secret/name` |
-| 3 | Auto-named Secrets Manager secret | Store secret at `{SECRET_PREFIX}{bucket}` |
-| 4 | Default | `aws configure` shared credentials |
-
-`<BUCKET>` is the bucket name uppercased with hyphens replaced by underscores:
-`cmt-prod-ap-southeast-2-melton-toyota` → `CMT_PROD_AP_SOUTHEAST_2_MELTON_TOYOTA`
-
-Sessions are cached per bucket — credentials are only resolved once per run.
-
-**Option 1 — paste credentials directly into `.env` (simplest):**
 ```bash
+# cmt-prod-ap-southeast-2-melton-toyota
 BUCKET_KEY_CMT_PROD_AP_SOUTHEAST_2_MELTON_TOYOTA=AKIA...
 BUCKET_SECRET_CMT_PROD_AP_SOUTHEAST_2_MELTON_TOYOTA=...
 ```
 
-**Option 2 — point to an existing Secrets Manager secret:**
-```bash
-BUCKET_SECRET_ID_CMT_PROD_AP_SOUTHEAST_2_MELTON_TOYOTA=your/existing/secret/name
-```
+Buckets with no entry use the default `aws configure` credentials automatically.
+Sessions are cached per bucket — credentials are only resolved once per run.
 
-The secret value must be JSON with keys `AccessKeyId` + `SecretAccessKey`
-(or `aws_access_key_id` + `aws_secret_access_key` — both formats are accepted).
-
-**Error behaviour:** if a bucket has explicit credentials configured but they fail
-(wrong secret name, missing IAM permission), the pipeline logs a clear error and
-skips that dealership rather than crashing the entire run.
+**Error behaviour:** if a bucket cannot be accessed (wrong credentials, missing
+permissions), the pipeline logs a clear error and skips that dealership rather
+than crashing the entire run.
 
 ---
 

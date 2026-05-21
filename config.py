@@ -91,11 +91,6 @@ SAVE_NULL_REVIEW     = os.environ.get("SAVE_NULL_REVIEW", "true").lower() == "tr
 UPLOAD_JPEG_QUALITY      = int(os.environ.get("UPLOAD_JPEG_QUALITY", "100"))
 NULL_REVIEW_JPEG_QUALITY = int(os.environ.get("NULL_REVIEW_JPEG_QUALITY", "90"))
 
-# ── AWS Secrets Manager ──────────────────────────────────────────────
-# Buckets with a secret at {SECRET_PREFIX}{bucket_name} get dedicated credentials.
-# Buckets without a matching secret fall back to the default aws configure session.
-SECRET_PREFIX        = os.environ.get("SECRET_PREFIX", "pipeline/buckets/")
-
 # ── EC2 (disabled when running locally) ──────────────────────────────
 EC2_SELF_STOP        = os.environ.get("EC2_SELF_STOP", "false").lower() == "true"
 EC2_INSTANCE_ID      = os.environ.get("EC2_INSTANCE_ID", "")
