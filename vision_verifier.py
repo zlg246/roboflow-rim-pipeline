@@ -6,6 +6,7 @@ Set VISION_PROVIDER="openai" or "claude" in .env to choose.
 
 import json
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 import config
@@ -16,9 +17,6 @@ if TYPE_CHECKING:
     from openai import OpenAI
 
 logger = logging.getLogger(__name__)
-
-_MD_FENCE = "```"
-_JSON_TAG  = "json"
 
 SYSTEM_PROMPT = """
 You are a quality-control agent for a vehicle panel damage annotation pipeline.
@@ -179,6 +177,34 @@ def _call_claude(b64_image: str, media_type: str,
     return response.content[0].text.strip()
 
 
+# ── Response parsing ──────────────────────────────────────────────────
+
+def _parse_vision_response(raw: str) -> VisionResult:
+    """Extract and parse the JSON object from a vision model response.
+
+    Handles three formats in order:
+    1. Bare JSON (starts with '{')
+    2. JSON wrapped in a markdown fence (```json ... ```)
+    3. JSON somewhere in free text (brace scan)
+    """
+    logger.debug("[vision] raw response: %s", raw)
+    text = raw.strip()
+
+    if text.startswith("{"):
+        return json.loads(text)
+
+    m = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
+    if m:
+        return json.loads(m.group(1))
+
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        return json.loads(text[start : end + 1])
+
+    logger.error("[vision] cannot parse response: %r", raw)
+    raise ValueError(f"Bad JSON from vision model — raw: {raw!r}")
+
+
 # ── Public interface ──────────────────────────────────────────────────
 
 def verify_image(
@@ -212,11 +238,4 @@ def verify_image(
     else:
         raw = _call_openai(b64_image, media_type, pred_text, filename)
 
-    # Strip accidental markdown fences some models add despite instructions.
-    if raw.startswith(_MD_FENCE):
-        parts = raw.split(_MD_FENCE)
-        raw = parts[1] if len(parts) > 1 else raw
-        if raw.startswith(_JSON_TAG):
-            raw = raw[len(_JSON_TAG):]
-
-    return json.loads(raw.strip())
+    return _parse_vision_response(raw)

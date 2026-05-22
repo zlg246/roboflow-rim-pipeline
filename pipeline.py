@@ -90,7 +90,7 @@ def run(
     dealership    = _extract_dealership(bucket)
     date_from_str = date_from.strftime("%Y-%m-%d")
     date_to_str   = date_to.strftime("%Y-%m-%d")
-    batch_name    = f"{dealership}_{date_from_str}_{date_to_str}"
+    batch_name    = f"Agent_{dealership}_{date_from_str}_{date_to_str}"
 
     _make_log_path()
     log_path = LOG_PATH
