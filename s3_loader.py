@@ -2,15 +2,14 @@
 s3_loader.py — Read-only access to the production S3 bucket.
 
 IMPORTANT: This module NEVER writes to the production bucket.
-  - list_image_keys()    → s3:ListBucket  (read)
-  - load_image()         → s3:GetObject   (read)
-  - upload_log_to_s3()   → s3:PutObject   to LOG_BUCKET only (separate bucket)
+  - list_rim_image_keys() → s3:ListBucket  (read)
+  - load_image()          → s3:GetObject   (read)
+  - upload_log_to_s3()    → s3:PutObject   to LOG_BUCKET only (separate bucket)
 """
 
 import base64
 import logging
 import re
-from collections import defaultdict
 from datetime import date
 from io import BytesIO
 from pathlib import Path
@@ -29,95 +28,58 @@ def _get_client(bucket: str):
     """Return an S3 client using the appropriate credentials for the given bucket."""
     return get_session(bucket).client("s3", region_name=config.AWS_REGION)
 
+
 # ── Session folder parsing ────────────────────────────────────────────
-# Matches folder names like: SCANNER_A_0009bf_2026-03-16_14-10-49
-# Captures the date segment (group 1)
+# Matches session folder names like: SCANNER_A_0009bf_2026-03-16_14-10-49
+# Captures the date segment (group 1).
 _SESSION_DATE_RE = re.compile(
     r"SCANNER_[^/]+_(\d{4}-\d{2}-\d{2})_[^/]+/"
 )
 
 
-def _parse_session_info(key: str) -> tuple[str | None, str | None, date | None]:
-    """
-    Extract (session_folder, subfolder, session_date) from a full S3 key.
+# ── Rim wheel scanner listing ─────────────────────────────────────────
 
-    Expected key structure:
-      prior_condition/SCANNER_A_0009bf_2026-03-16_14-10-49/3/frame_001.jpg
-      └─ root_prefix ─┘└──────────── session ────────────┘└┘└─ filename ─┘
-                                                           subfolder
-
-    Returns:
-        (session_folder_name, subfolder_str, date_object),
-        or (None, None, None) if the key does not match the expected structure.
-    """
-    parts = key.split("/")
-
-    # Need at least: root_prefix / session / subfolder / filename
-    if len(parts) < 4:
-        return None, None, None
-
-    session_folder = parts[-3]
-    subfolder      = parts[-2]
-
-    m = _SESSION_DATE_RE.search(key)
-    if not m:
-        return None, None, None
-
-    try:
-        session_date = date.fromisoformat(m.group(1))
-    except ValueError:
-        return None, None, None
-
-    return session_folder, subfolder, session_date
-
-
-# ── Main listing function ─────────────────────────────────────────────
-
-def list_image_keys(
-    date_from:         date | None        = None,
-    date_to:           date | None        = None,
-    bucket:            str                = config.S3_BUCKET,
-    root_prefix:       str                = config.S3_ROOT_PREFIX,
-    target_subfolders: set[str] | None    = None,
+def list_rim_image_keys(
+    date_from:   date | None = None,
+    date_to:     date | None = None,
+    bucket:      str         = config.S3_BUCKET,
+    root_prefix: str         = config.RIM_S3_ROOT_PREFIX,
 ) -> list[str]:
     """
-    List image keys from target camera subfolders within the date range.
-    Performs only s3:ListBucket — no writes to the production bucket.
+    List wheel scanner org_image keys from the given date range.
 
-    S3 key structure:
-      <bucket>/prior_condition/SCANNER_<device>_<YYYY-MM-DD>_<time>/<subfolder>/<image>
+    S3 key structure::
+
+        <bucket>/wheel_scanner/SCANNER_A_001608_2026-05-06_09-06-18/left_rear_wheel_org_image.jpg
+
+    Only files ending with ``_org_image.jpg`` are returned; overlay images
+    (``_overlay.jpg``, etc.) are silently skipped.
 
     Args:
-        date_from:          Inclusive start date (default: Monday this week).
-        date_to:            Inclusive end date (default: Friday this week).
-        bucket:             S3 bucket name.
-        root_prefix:        Top-level folder prefix.
-        target_subfolders:  Set of subfolder names, e.g. {"3", "7"}.
+        date_from:   Inclusive start date (default: Monday this week).
+        date_to:     Inclusive end date (default: Friday this week).
+        bucket:      S3 bucket name.
+        root_prefix: Top-level folder prefix (default: ``wheel_scanner/``).
 
     Returns:
         Sorted list of matching S3 keys.
     """
-    date_from         = date_from         or config.default_date_from()
-    date_to           = date_to           or config.default_date_to()
-    target_subfolders = target_subfolders or config.S3_TARGET_SUBFOLDERS
+    date_from = date_from or config.default_date_from()
+    date_to   = date_to   or config.default_date_to()
 
     if date_from > date_to:
-        raise ValueError(
-            f"date_from ({date_from}) must be <= date_to ({date_to})"
-        )
+        raise ValueError(f"date_from ({date_from}) must be <= date_to ({date_to})")
 
-    logger.info("[s3] Bucket         : %s  (READ ONLY)", bucket)
-    logger.info("[s3] Root prefix    : %s", root_prefix)
-    logger.info("[s3] Date range     : %s → %s", date_from, date_to)
-    logger.info("[s3] Camera angles  : subfolders %s", sorted(target_subfolders))
+    logger.info("[s3-rim] Bucket       : %s  (READ ONLY)", bucket)
+    logger.info("[s3-rim] Root prefix  : %s", root_prefix)
+    logger.info("[s3-rim] Date range   : %s → %s", date_from, date_to)
 
-    s3 = _get_client(bucket)
+    s3        = _get_client(bucket)
     paginator = s3.get_paginator("list_objects_v2")
 
-    # Pass 1: list session folders only (Delimiter avoids descending into objects).
-    # Each CommonPrefix looks like: prior_condition/SCANNER_A_0009bf_2026-03-16_14-10-49/
-    # Filter by date before touching any actual image files.
-    logger.info("[s3] Pass 1: finding sessions in date range...")
+    # Pass 1: find session folders within the date range.
+    # CommonPrefixes look like: wheel_scanner/SCANNER_A_001608_2026-05-06_09-06-18/
+    logger.info("[s3-rim] Pass 1: finding sessions in date range...")
     matching_sessions: list[str] = []
     for page in paginator.paginate(Bucket=bucket, Prefix=root_prefix, Delimiter="/"):
         for cp in page.get("CommonPrefixes", []):
@@ -132,57 +94,30 @@ def list_image_keys(
             if date_from <= session_date <= date_to:
                 matching_sessions.append(session_prefix)
 
-    logger.info("[s3] Sessions in range: %d", len(matching_sessions))
+    logger.info("[s3-rim] Sessions in range: %d", len(matching_sessions))
     if not matching_sessions:
-        logger.info("[s3] ✅ Matched     : 0 images\n")
+        logger.info("[s3-rim] ✅ Matched   : 0 images\n")
         return []
 
-    # Pass 2: list objects only inside matching sessions × target subfolders.
-    # This skips all data outside the date range entirely.
-    logger.info("[s3] Pass 2: listing images in matched sessions...")
-    keys:     list[str] = []
-    skip_ext: int       = 0
+    # Pass 2: list org_image files directly inside each session folder.
+    # There is no numeric subfolder for wheel scanner images.
+    logger.info("[s3-rim] Pass 2: listing org images in matched sessions...")
+    keys:    list[str] = []
+    skipped: int       = 0
     for session_prefix in matching_sessions:
-        for subfolder in target_subfolders:
-            subfolder_prefix = f"{session_prefix}{subfolder}/"
-            for page in paginator.paginate(Bucket=bucket, Prefix=subfolder_prefix):
-                for obj in page.get("Contents", []):
-                    key = obj["Key"]
-                    if any(key.lower().endswith(ext) for ext in config.VALID_EXTENSIONS):
-                        keys.append(key)
-                    else:
-                        skip_ext += 1
+        for page in paginator.paginate(Bucket=bucket, Prefix=session_prefix):
+            for obj in page.get("Contents", []):
+                key      = obj["Key"]
+                filename = key.rsplit("/", 1)[-1]
+                if filename.endswith("_org_image.jpg"):
+                    keys.append(key)
+                else:
+                    skipped += 1
 
     keys.sort()
-
-    logger.info("[s3] Skipped (ext)  : %d", skip_ext)
-    logger.info("[s3] ✅ Matched     : %d images\n", len(keys))
-
-    _print_session_summary(keys)
+    logger.info("[s3-rim] Skipped (non-org): %d", skipped)
+    logger.info("[s3-rim] ✅ Matched   : %d images\n", len(keys))
     return keys
-
-
-def _print_session_summary(keys: list[str]) -> None:
-    """Log high-level session statistics."""
-    if not keys:
-        return
-    sessions: dict = defaultdict(lambda: defaultdict(int))
-    for key in keys:
-        session, subfolder, _ = _parse_session_info(key)
-        if session:
-            sessions[session][subfolder] += 1
-
-    subfolder_totals: dict[str, int] = defaultdict(int)
-    for subfolders in sessions.values():
-        for sf, count in subfolders.items():
-            subfolder_totals[sf] += count
-
-    logger.info(
-        "[s3] Sessions: %d  |  Images per subfolder: %s",
-        len(sessions),
-        "  ".join(f"{sf}={count}" for sf, count in sorted(subfolder_totals.items())),
-    )
-    logger.info("")
 
 
 # ── Image loading (read-only) ─────────────────────────────────────────
@@ -254,9 +189,11 @@ def upload_log_to_s3(local_path: str) -> None:
         return
 
     try:
-        _get_client(config.LOG_BUCKET).upload_file(local_path, config.LOG_BUCKET, config.LOG_S3_KEY)
+        _get_client(config.LOG_BUCKET).upload_file(
+            local_path, config.LOG_BUCKET, config.LOG_S3_KEY,
+        )
         logger.info(
-            "[s3] Log uploaded → s3://%s/%s", config.LOG_BUCKET, config.LOG_S3_KEY
+            "[s3] Log uploaded → s3://%s/%s", config.LOG_BUCKET, config.LOG_S3_KEY,
         )
     except Exception as e:
         logger.error("[s3] Log upload failed (non-fatal): %s", e)

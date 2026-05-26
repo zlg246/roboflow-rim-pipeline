@@ -4,17 +4,20 @@ import config
 
 
 def test_required_api_keys_present():
-    assert config.OPENAI_API_KEY,  "OPENAI_API_KEY missing from .env"
     assert config.ROBOFLOW_API_KEY,   "ROBOFLOW_API_KEY missing from .env"
     assert config.ROBOFLOW_WORKSPACE, "ROBOFLOW_WORKSPACE missing from .env"
 
 
-def test_production_bucket_name():
-    assert config.S3_BUCKET == "prod-castle-hill-toyota"
+def test_production_bucket_is_set():
+    assert config.S3_BUCKET, "S3_BUCKET must be non-empty"
 
 
-def test_target_subfolders_default():
-    assert config.S3_TARGET_SUBFOLDERS == {"3", "7"}
+def test_rim_s3_prefix():
+    assert config.RIM_S3_ROOT_PREFIX == "wheel_scanner/"
+
+
+def test_rim_roboflow_project_default():
+    assert config.RIM_ROBOFLOW_PROJECT == "test_project-e4bw5"
 
 
 def test_log_bucket_differs_from_prod():
@@ -25,15 +28,12 @@ def test_log_bucket_differs_from_prod():
         )
 
 
-def test_upload_decisions_are_valid():
-    valid = {"correct", "partial", "missed", "other", "null", "bad_quality"}
-    assert config.UPLOAD_DECISIONS.issubset(valid)
-    assert config.SKIP_DECISIONS.issubset(valid)
-    assert config.UPLOAD_DECISIONS.isdisjoint(config.SKIP_DECISIONS)
-
-
 def test_yolo_threshold_range():
     assert 0.0 < config.YOLO_CONF_THRESHOLD < 1.0
+
+
+def test_upload_sleep_non_negative():
+    assert config.UPLOAD_SLEEP >= 0.0
 
 
 def test_default_date_range_is_monday_to_friday():

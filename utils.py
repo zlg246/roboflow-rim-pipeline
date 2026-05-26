@@ -1,15 +1,12 @@
-"""Shared utility functions for the pipeline."""
+"""Shared utility functions for the rim pipeline."""
 
 import argparse
 import json
 import logging
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
 
 import boto3
-from PIL import ImageDraw
-from PIL.Image import Image as PilImage
 
 import config
 from pipeline_types import PipelineRecord
@@ -26,9 +23,10 @@ def _extract_dealership(bucket: str) -> str:
     """
     Extract a clean dealership identifier from a bucket name.
 
-    Handles two naming conventions:
-      Old: prod-worthington-bmw               → worthington_bmw
-      New: cmt-prod-ap-southeast-2-melton-toyota → melton_toyota
+    Handles two naming conventions::
+
+        prod-castle-hill-toyota                         → castle_hill_toyota
+        cmt-prod-ap-southeast-2-melton-toyota           → melton_toyota
     """
     new_prefix = f"cmt-prod-{config.AWS_REGION}-"
     if bucket.startswith(new_prefix):
@@ -86,7 +84,7 @@ def _parse_date_arg(value: str) -> date:
 def _parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Vehicle panel damage annotation pipeline",
+        description="Rim scratch annotation pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
@@ -100,18 +98,13 @@ def _parse_args() -> argparse.Namespace:
         help="End date inclusive. Default: Friday of current week.",
     )
     parser.add_argument(
-        "--subfolders", type=str, default=None,
-        metavar="N,N",
-        help="Comma-separated camera subfolders to process. Default: 3,7",
-    )
-    parser.add_argument(
         "--limit", type=int, default=None,
         metavar="N",
         help="Process at most N images. Useful for testing.",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
-        help="Run YOLO + vision model but skip Roboflow upload.",
+        help="Run YOLO but skip Roboflow upload.",
     )
     parser.add_argument(
         "--bucket", type=str, default=None,
@@ -188,47 +181,3 @@ def _stop_self() -> None:
         boto3.client("ec2", region_name=config.AWS_REGION).stop_instances(
             InstanceIds=[config.EC2_INSTANCE_ID]
         )
-
-
-# ── Null review ───────────────────────────────────────────────────────
-
-def _save_null_review(
-    bucket:      str,
-    pil_image:   PilImage,
-    s3_key:      str,
-    predictions: list[dict[str, Any]],
-) -> None:
-    """
-    Save a YOLO-detected image rejected by the vision model for manual review.
-
-    Draws red bounding boxes for each YOLO prediction on a copy of the image
-    and saves it to null_review/<bucket>/<original_filename>.
-
-    Args:
-        bucket:      S3 bucket name (used as a subdirectory name).
-        pil_image:   Original PIL image.
-        s3_key:      Original S3 key (used to derive the output filename).
-        predictions: YOLO predictions to draw on the image.
-    """
-    review_dir = Path("null_review", bucket.replace("-", "_"))
-    review_dir.mkdir(parents=True, exist_ok=True)
-
-    img  = pil_image.copy()
-    draw = ImageDraw.Draw(img)
-    w, h = img.size
-
-    for pred in predictions:
-        cx = pred["x"] * w
-        cy = pred["y"] * h
-        bw = pred["width"] * w
-        bh = pred["height"] * h
-        x0, y0 = cx - bw / 2, cy - bh / 2
-        x1, y1 = cx + bw / 2, cy + bh / 2
-        draw.rectangle([x0, y0, x1, y1], outline="red", width=3)
-        label = f"{pred['class']} {pred['confidence']:.2f}"
-        draw.text((x0 + 2, y0 + 2), label, fill="red")
-
-    safe_name = s3_key.replace("/", "_")
-    out_path  = review_dir / safe_name
-    img.save(out_path, "JPEG", quality=config.NULL_REVIEW_JPEG_QUALITY)
-    logger.info("         [review] → %s", out_path)

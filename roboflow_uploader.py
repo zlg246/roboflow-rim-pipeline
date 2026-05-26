@@ -1,7 +1,8 @@
 """
-roboflow_uploader.py — Upload images and annotations to Roboflow.
+roboflow_uploader.py — Upload rim wheel images and polygon annotations to Roboflow.
 """
 
+import json
 import logging
 import os
 import tempfile
@@ -12,18 +13,21 @@ import config
 
 logger = logging.getLogger(__name__)
 
-_rf_project = None
+_rim_rf_project = None
 
 
-def _get_project():
-    """Lazily connect to the Roboflow project and cache the handle."""
-    global _rf_project
-    if _rf_project is None:
+def _get_rim_project():
+    """Lazily connect to the rim scratch Roboflow project and cache the handle."""
+    global _rim_rf_project
+    if _rim_rf_project is None:
         from roboflow import Roboflow
-        rf          = Roboflow(api_key=config.ROBOFLOW_API_KEY)
-        _rf_project = rf.workspace(config.ROBOFLOW_WORKSPACE).project(config.ROBOFLOW_PROJECT)
-        logger.info("[roboflow] Connected: %s", _rf_project.name)
-    return _rf_project
+        rf              = Roboflow(api_key=config.ROBOFLOW_API_KEY)
+        _rim_rf_project = (
+            rf.workspace(config.ROBOFLOW_WORKSPACE)
+            .project(config.RIM_ROBOFLOW_PROJECT)
+        )
+        logger.info("[roboflow-rim] Connected: %s", _rim_rf_project.name)
+    return _rim_rf_project
 
 
 def _pil_to_bytes(pil_image) -> bytes:
@@ -33,76 +37,114 @@ def _pil_to_bytes(pil_image) -> bytes:
     return buf.getvalue()
 
 
-def _build_voc_xml(filename: str, img_w: int, img_h: int,
-                   annotations: list[dict[str, Any]]) -> str:
+def _build_coco_json(
+    filename:    str,
+    img_w:       int,
+    img_h:       int,
+    predictions: list[dict[str, Any]],
+) -> str:
     """
-    Build a Pascal VOC XML annotation string.
+    Build a COCO JSON annotation string for polygon segmentation predictions.
 
-    Converts normalised (0–1) centre-x/y/w/h coordinates to pixel
-    xmin/ymin/xmax/ymax required by the VOC format.
+    Each prediction must contain a ``polygon`` key — a list of ``[x_norm, y_norm]``
+    pairs (normalised 0–1). The function denormalises them to pixel coordinates
+    and computes the bounding box from the polygon extents.
+
+    COCO segmentation format uses a flat list of pixel coordinates::
+
+        "segmentation": [[x1, y1, x2, y2, x3, y3, ...]]
 
     Args:
-        filename:    Image filename embedded in the XML.
+        filename:    Image filename embedded in the JSON.
         img_w:       Image width in pixels.
         img_h:       Image height in pixels.
-        annotations: List of correction dicts with keys: class, x, y, width, height.
+        predictions: List of dicts with keys: class, confidence, polygon.
 
     Returns:
-        VOC XML string.
+        COCO JSON string.
     """
-    objects_xml = ""
-    for ann in annotations:
-        cx   = ann["x"]      * img_w
-        cy   = ann["y"]      * img_h
-        w    = ann["width"]  * img_w
-        h    = ann["height"] * img_h
-        xmin = max(0,     int(cx - w / 2))
-        ymin = max(0,     int(cy - h / 2))
-        xmax = min(img_w, int(cx + w / 2))
-        ymax = min(img_h, int(cy + h / 2))
-        objects_xml += f"""
-  <object>
-    <name>{ann['class']}</name>
-    <pose>Unspecified</pose>
-    <truncated>0</truncated>
-    <difficult>0</difficult>
-    <bndbox>
-      <xmin>{xmin}</xmin>
-      <ymin>{ymin}</ymin>
-      <xmax>{xmax}</xmax>
-      <ymax>{ymax}</ymax>
-    </bndbox>
-  </object>"""
+    # Build category map: class name → integer ID (1-indexed)
+    class_names = sorted(set(p["class"] for p in predictions))
+    cat_id_map  = {name: i + 1 for i, name in enumerate(class_names)}
 
-    return f"""<annotation>
-  <filename>{filename}</filename>
-  <size>
-    <width>{img_w}</width>
-    <height>{img_h}</height>
-    <depth>3</depth>
-  </size>{objects_xml}
-</annotation>"""
+    categories = [
+        {"id": cat_id, "name": name, "supercategory": ""}
+        for name, cat_id in cat_id_map.items()
+    ]
+
+    annotations = []
+    for ann_id, pred in enumerate(predictions, start=1):
+        polygon_norm = pred["polygon"]  # [[x_norm, y_norm], ...]
+
+        # Denormalise to pixel coordinates
+        px_coords = [(pt[0] * img_w, pt[1] * img_h) for pt in polygon_norm]
+
+        # COCO segmentation: flat list [x1, y1, x2, y2, ...]
+        flat = [coord for pt in px_coords for coord in pt]
+
+        # Bounding box derived from polygon extents
+        xs     = [pt[0] for pt in px_coords]
+        ys     = [pt[1] for pt in px_coords]
+        x_min  = min(xs);  x_max = max(xs)
+        y_min  = min(ys);  y_max = max(ys)
+        bbox_w = x_max - x_min
+        bbox_h = y_max - y_min
+        area   = bbox_w * bbox_h
+
+        annotations.append({
+            "id":           ann_id,
+            "image_id":     1,
+            "category_id":  cat_id_map[pred["class"]],
+            "segmentation": [flat],                                       # list of polygons
+            "area":         round(area, 2),
+            "bbox":         [round(x_min, 2), round(y_min, 2),
+                             round(bbox_w, 2), round(bbox_h, 2)],         # [x, y, w, h]
+            "iscrowd":      0,
+        })
+
+    coco = {
+        "images":      [{"id": 1, "file_name": filename,
+                          "width": img_w, "height": img_h}],
+        "annotations": annotations,
+        "categories":  categories,
+    }
+    return json.dumps(coco, indent=2)
 
 
-def upload(
+def upload_rim(
     pil_image:   Any,
     s3_key:      str,
-    corrections: list[dict[str, Any]],
+    predictions: list[dict[str, Any]],
     img_w:       int,
     img_h:       int,
     batch_name:  str,
     dealership:  str,
 ) -> bool:
     """
-    Upload one image + annotations to Roboflow.
+    Upload one rim wheel image + polygon predictions to Roboflow.
 
-    The image is saved to a temporary directory under the desired filename so that
-    Roboflow names the image correctly (it uses the filename from image_path).
+    Always uploads — with a COCO JSON annotation file when predictions are
+    present, or as an unannotated image when there are none.
+
+    Filename format::
+
+        {dealership}_{scan_folder}_{wheel_position}.jpg
+
+    Example::
+
+        castle_hill_toyota_SCANNER_A_001608_2026-05-06_09-06-18_left_rear_wheel.jpg
+
+    The ``wheel_position`` is derived from the S3 filename by stripping the
+    ``_org_image.jpg`` suffix (e.g. ``left_rear_wheel_org_image.jpg`` →
+    ``left_rear_wheel``).
 
     Args:
         pil_image:   PIL Image to upload.
         s3_key:      Original S3 key — used to derive the upload filename.
-        corrections: List of annotation dicts (class, x, y, width, height).
+                     Expected structure:
+                     ``wheel_scanner/<scan_folder>/<wheel_pos>_org_image.jpg``
+        predictions: List of prediction dicts (class, confidence, polygon).
+                     Pass an empty list when no scratches were detected.
         img_w:       Image width in pixels.
         img_h:       Image height in pixels.
         batch_name:  Roboflow batch name.
@@ -111,53 +153,56 @@ def upload(
     Returns:
         True on success, False on failure.
     """
-    # Build name: dealership_scanfolder_subfolder_imagefile
-    # s3_key: prior_condition/SCANNER_A_.../3/frame_001.jpg
+    # Derive upload filename from S3 key
+    # e.g. wheel_scanner/SCANNER_A_001608_2026-05-06_09-06-18/left_rear_wheel_org_image.jpg
     parts       = s3_key.split("/")
-    scan_folder = parts[-3] if len(parts) >= 4 else "unknown"
-    subfolder   = parts[-2] if len(parts) >= 3 else "unknown"
-    orig_name   = parts[-1]
-    image_name  = f"{dealership}_{scan_folder}_{subfolder}_{orig_name}"
+    scan_folder = parts[-2] if len(parts) >= 3 else "unknown"
+    orig_name   = parts[-1]                                    # left_rear_wheel_org_image.jpg
+    wheel_pos   = orig_name.replace("_org_image.jpg", "")     # left_rear_wheel
+    image_name  = f"{dealership}_{scan_folder}_{wheel_pos}.jpg"
 
-    to_upload = corrections
-    tmp_dir = img_tmp = xml_tmp = None
+    tmp_dir = img_tmp = ann_tmp = None
 
     try:
-        project = _get_project()
+        project = _get_rim_project()
 
-        # Use a named temp dir so we control the filename Roboflow sees.
         tmp_dir = tempfile.mkdtemp()
         img_tmp = os.path.join(tmp_dir, image_name)
         with open(img_tmp, "wb") as f:
             f.write(_pil_to_bytes(pil_image))
 
-        if to_upload:
-            xml     = _build_voc_xml(image_name, img_w, img_h, to_upload)
-            xml_tmp = os.path.join(tmp_dir, image_name.rsplit(".", 1)[0] + ".xml")
-            with open(xml_tmp, "w", encoding="utf-8") as f:
-                f.write(xml)
+        if predictions:
+            coco_str = _build_coco_json(image_name, img_w, img_h, predictions)
+            ann_tmp  = os.path.join(tmp_dir, image_name.rsplit(".", 1)[0] + ".json")
+            with open(ann_tmp, "w", encoding="utf-8") as f:
+                f.write(coco_str)
 
         project.upload(
             image_path        = img_tmp,
-            annotation_path   = xml_tmp,
+            annotation_path   = ann_tmp,
             batch_name        = batch_name,
             tag_names         = [],
             is_prediction     = True,
             num_retry_uploads = 3,
         )
 
-        if to_upload:
-            logger.info("    [roboflow] ✅ %d box(es) uploaded: %s", len(to_upload), image_name)
+        if predictions:
+            logger.info(
+                "    [roboflow-rim] ✅ %d polygon(s) uploaded: %s",
+                len(predictions), image_name,
+            )
         else:
-            logger.info("    [roboflow] 📭 Null label uploaded: %s", image_name)
+            logger.info(
+                "    [roboflow-rim] 📭 No annotation uploaded: %s", image_name,
+            )
         return True
 
     except Exception as e:
-        logger.error("    [roboflow] ❌ Upload failed: %s", e)
+        logger.error("    [roboflow-rim] ❌ Upload failed: %s", e)
         return False
 
     finally:
-        for path in (img_tmp, xml_tmp):
+        for path in (img_tmp, ann_tmp):
             if path and os.path.exists(path):
                 os.unlink(path)
         if tmp_dir and os.path.exists(tmp_dir):
