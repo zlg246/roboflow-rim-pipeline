@@ -25,7 +25,7 @@ Example::
 
 Usage examples::
 
-    # Current week Monday–Friday (default)
+    # Current week Monday–Friday, both projects (default)
     python rim_pipeline.py
 
     # Specific date range
@@ -34,8 +34,14 @@ Usage examples::
     # Single day
     python rim_pipeline.py --from 2026-05-06 --to 2026-05-06
 
-    # Dry run — run YOLO but skip Roboflow upload
+    # Dry run — run YOLO but skip all Roboflow uploads
     python rim_pipeline.py --from 2026-05-06 --to 2026-05-06 --dry-run
+
+    # Upload to rim_seg only (skip annotated scratch project)
+    python rim_pipeline.py --skip-rim-scratch
+
+    # Upload to rim_scratch only (skip raw image project)
+    python rim_pipeline.py --skip-rim-seg
 
     # Limit images (useful for quick tests)
     python rim_pipeline.py --from 2026-05-06 --to 2026-05-06 --limit 5
@@ -71,32 +77,36 @@ logger = logging.getLogger(__name__)
 
 
 def run(
-    date_from: date | None = None,
-    date_to:   date | None = None,
-    bucket:    str | None  = None,
-    limit:     int | None  = None,
-    dry_run:   bool        = False,
+    date_from:       date | None = None,
+    date_to:         date | None = None,
+    bucket:          str | None  = None,
+    limit:           int | None  = None,
+    dry_run:         bool        = False,
+    run_rim_scratch: bool        = True,
+    run_rim_seg:     bool        = True,
 ) -> None:
     """
     Run the rim scratch annotation pipeline for a given date range.
 
     Reads ``*_org_image.jpg`` files from the ``wheel_scanner/`` S3 prefix,
-    runs YOLO rim scratch inference, then uploads every image to two Roboflow
-    projects:
+    runs YOLO rim scratch inference, then uploads every image to the enabled
+    Roboflow projects:
 
     - **rim_scratch**: image + YOLO polygon annotations (or unannotated if no
-      predictions).
+      predictions). Disabled with ``--skip-rim-scratch``.
     - **rim_seg**: raw image, no annotations — all images regardless of
-      detections.
+      detections. Disabled with ``--skip-rim-seg``.
 
     No vision verification step — YOLO predictions are uploaded directly.
 
     Args:
-        date_from: Inclusive start date (default: Monday this week).
-        date_to:   Inclusive end date (default: Friday this week).
-        bucket:    S3 bucket to read from (default from config).
-        limit:     Maximum number of images to process (for testing).
-        dry_run:   If True, skip Roboflow uploads but run all other steps.
+        date_from:       Inclusive start date (default: Monday this week).
+        date_to:         Inclusive end date (default: Friday this week).
+        bucket:          S3 bucket to read from (default from config).
+        limit:           Maximum number of images to process (for testing).
+        dry_run:         If True, skip all Roboflow uploads but run other steps.
+        run_rim_scratch: If False, skip rim_scratch uploads entirely.
+        run_rim_seg:     If False, skip rim_seg uploads entirely.
     """
     start     = datetime.now(timezone.utc)
     date_from = date_from or config.default_date_from()
@@ -117,8 +127,16 @@ def run(
     logger.info("  Date range          : %s → %s", date_from, date_to)
     logger.info("  S3 prefix           : %s", config.RIM_S3_ROOT_PREFIX)
     logger.info("  YOLO model          : %s", config.RIM_YOLO_MODEL_PATH)
-    logger.info("  Rim-scratch project : %s", config.RIM_SCRATCH_ROBOFLOW_PROJECT)
-    logger.info("  Rim-seg project     : %s", config.RIM_SEG_ROBOFLOW_PROJECT)
+    logger.info(
+        "  Rim-scratch project : %s  (%s)",
+        config.RIM_SCRATCH_ROBOFLOW_PROJECT,
+        "enabled" if run_rim_scratch else "SKIPPED",
+    )
+    logger.info(
+        "  Rim-seg project     : %s  (%s)",
+        config.RIM_SEG_ROBOFLOW_PROJECT,
+        "enabled" if run_rim_seg else "SKIPPED",
+    )
     logger.info("  Roboflow batch      : %s", batch_name)
     logger.info("  Dry run             : %s", dry_run)
     logger.info("  Log file            : %s", log_path)
@@ -191,7 +209,10 @@ def run(
             record["rim_seg_uploaded"]     = False
 
             # 3 ── Upload to rim_scratch project (image + YOLO annotations)
-            if dry_run:
+            if not run_rim_scratch:
+                logger.info("         [rim-scratch] Skipped (--skip-rim-scratch)")
+                record["rim_scratch_uploaded"] = "skipped"
+            elif dry_run:
                 logger.info(
                     "         [rim-scratch] DRY RUN — would upload with %d annotation(s)",
                     len(predictions),
@@ -212,7 +233,10 @@ def run(
                     rim_scratch_uploaded += 1
 
             # 4 ── Upload to rim_seg project (raw image, no annotation)
-            if dry_run:
+            if not run_rim_seg:
+                logger.info("         [rim-seg] Skipped (--skip-rim-seg)")
+                record["rim_seg_uploaded"] = "skipped"
+            elif dry_run:
                 logger.info(
                     "         [rim-seg] DRY RUN — would upload to rim_seg project",
                 )
@@ -275,11 +299,13 @@ if __name__ == "__main__":
     args = _parse_args()
     try:
         run(
-            date_from = args.date_from,
-            date_to   = args.date_to,
-            bucket    = args.bucket,
-            limit     = args.limit,
-            dry_run   = args.dry_run,
+            date_from       = args.date_from,
+            date_to         = args.date_to,
+            bucket          = args.bucket,
+            limit           = args.limit,
+            dry_run         = args.dry_run,
+            run_rim_scratch = not args.skip_rim_scratch,
+            run_rim_seg     = not args.skip_rim_seg,
         )
     except Exception as e:
         logger.error("[rim_pipeline] ❌ Unexpected error: %s", e)

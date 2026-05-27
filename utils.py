@@ -104,7 +104,22 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--dry-run", action="store_true",
-        help="Run YOLO but skip Roboflow upload.",
+        help="Run YOLO but skip all Roboflow uploads.",
+    )
+    parser.add_argument(
+        "--skip-rim-scratch", action="store_true",
+        help=(
+            "Disable upload to the rim_scratch project "
+            f"({config.RIM_SCRATCH_ROBOFLOW_PROJECT}). "
+            "YOLO inference still runs."
+        ),
+    )
+    parser.add_argument(
+        "--skip-rim-seg", action="store_true",
+        help=(
+            "Disable upload to the rim_seg project "
+            f"({config.RIM_SEG_ROBOFLOW_PROJECT})."
+        ),
     )
     parser.add_argument(
         "--bucket", type=str, default=None,
