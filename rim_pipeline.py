@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
 Rim Scratch Annotation Pipeline
-S3 (read-only) → YOLO rim scratch model → Roboflow
+S3 (read-only) → YOLO rim scratch model → Roboflow (two projects)
 
-Reads wheel scanner images from S3 under the ``wheel_scanner/`` prefix,
-runs a dedicated rim scratch segmentation model, and uploads every image
-to the configured Roboflow project — with predicted annotations when
-scratches are detected, or as a plain image when none are found.
+Reads wheel scanner images from S3 under the ``wheel_scanner/`` prefix and
+uploads every image to two parallel Roboflow projects:
+
+  rim_scratch  — image + YOLO polygon annotations (config.RIM_SCRATCH_ROBOFLOW_PROJECT)
+  rim_seg      — raw image, no annotations        (config.RIM_SEG_ROBOFLOW_PROJECT)
 
 S3 key structure::
 
@@ -52,7 +53,7 @@ from botocore.exceptions import ClientError
 
 import config
 from pipeline_types import PipelineRecord
-from roboflow_uploader import upload_rim
+from roboflow_uploader import upload_rim_scratch, upload_rim_seg
 from s3_loader import list_rim_image_keys, load_image, upload_log_to_s3
 from utils import (
     LOG_PATH,
@@ -80,8 +81,13 @@ def run(
     Run the rim scratch annotation pipeline for a given date range.
 
     Reads ``*_org_image.jpg`` files from the ``wheel_scanner/`` S3 prefix,
-    runs YOLO rim scratch inference, then uploads every image to Roboflow
-    (with annotations if predictions were found, without if not).
+    runs YOLO rim scratch inference, then uploads every image to two Roboflow
+    projects:
+
+    - **rim_scratch**: image + YOLO polygon annotations (or unannotated if no
+      predictions).
+    - **rim_seg**: raw image, no annotations — all images regardless of
+      detections.
 
     No vision verification step — YOLO predictions are uploaded directly.
 
@@ -90,7 +96,7 @@ def run(
         date_to:   Inclusive end date (default: Friday this week).
         bucket:    S3 bucket to read from (default from config).
         limit:     Maximum number of images to process (for testing).
-        dry_run:   If True, skip Roboflow upload but run all other steps.
+        dry_run:   If True, skip Roboflow uploads but run all other steps.
     """
     start     = datetime.now(timezone.utc)
     date_from = date_from or config.default_date_from()
@@ -111,7 +117,8 @@ def run(
     logger.info("  Date range          : %s → %s", date_from, date_to)
     logger.info("  S3 prefix           : %s", config.RIM_S3_ROOT_PREFIX)
     logger.info("  YOLO model          : %s", config.RIM_YOLO_MODEL_PATH)
-    logger.info("  Roboflow project    : %s", config.RIM_ROBOFLOW_PROJECT)
+    logger.info("  Rim-scratch project : %s", config.RIM_SCRATCH_ROBOFLOW_PROJECT)
+    logger.info("  Rim-seg project     : %s", config.RIM_SEG_ROBOFLOW_PROJECT)
     logger.info("  Roboflow batch      : %s", batch_name)
     logger.info("  Dry run             : %s", dry_run)
     logger.info("  Log file            : %s", log_path)
@@ -150,8 +157,9 @@ def run(
         logger.info("[rim_pipeline] Nothing new to process. Exiting.")
         return
 
-    uploaded = 0
-    errors   = 0
+    rim_scratch_uploaded = 0
+    rim_seg_uploaded     = 0
+    errors               = 0
 
     for i, key in enumerate(pending, 1):
         logger.info("[%4d/%d]  %s", i, len(pending), key)
@@ -173,23 +181,24 @@ def run(
                 or "none"
             )
             logger.info(
-                "         [yolo-rim] %d pred(s)  %s",
+                "         [yolo-rim-scratch] %d pred(s)  %s",
                 len(predictions), pred_summary,
             )
 
             record["yolo_count"]       = len(predictions)
             record["yolo_predictions"] = predictions
-            record["uploaded"]         = False
+            record["rim_scratch_uploaded"] = False
+            record["rim_seg_uploaded"]     = False
 
-            # 3 ── Upload to Roboflow (always — with or without predictions)
+            # 3 ── Upload to rim_scratch project (image + YOLO annotations)
             if dry_run:
                 logger.info(
-                    "         [upload] DRY RUN — would upload with %d annotation(s)",
+                    "         [rim-scratch] DRY RUN — would upload with %d annotation(s)",
                     len(predictions),
                 )
-                record["uploaded"] = "dry_run"
+                record["rim_scratch_uploaded"] = "dry_run"
             else:
-                ok = upload_rim(
+                ok = upload_rim_scratch(
                     pil_image   = pil,
                     s3_key      = key,
                     predictions = predictions,
@@ -198,9 +207,26 @@ def run(
                     batch_name  = batch_name,
                     dealership  = dealership,
                 )
-                record["uploaded"] = ok
+                record["rim_scratch_uploaded"] = ok
                 if ok:
-                    uploaded += 1
+                    rim_scratch_uploaded += 1
+
+            # 4 ── Upload to rim_seg project (raw image, no annotation)
+            if dry_run:
+                logger.info(
+                    "         [rim-seg] DRY RUN — would upload to rim_seg project",
+                )
+                record["rim_seg_uploaded"] = "dry_run"
+            else:
+                seg_ok = upload_rim_seg(
+                    pil_image  = pil,
+                    s3_key     = key,
+                    batch_name = batch_name,
+                    dealership = dealership,
+                )
+                record["rim_seg_uploaded"] = seg_ok
+                if seg_ok:
+                    rim_seg_uploaded += 1
 
         except Exception as e:
             logger.error("         [error]  %s", e)
@@ -217,10 +243,13 @@ def run(
         f"Production bucket  : {bucket}  (read-only, no writes)\n"
         f"Date range         : {date_from} → {date_to}\n"
         f"S3 prefix          : {config.RIM_S3_ROOT_PREFIX}\n"
-        f"Roboflow project   : {config.RIM_ROBOFLOW_PROJECT}\n"
+        f"Rim-scratch project: {config.RIM_SCRATCH_ROBOFLOW_PROJECT}\n"
+        f"Rim-seg project    : {config.RIM_SEG_ROBOFLOW_PROJECT}\n"
         f"Duration           : {elapsed:.0f}s\n"
         f"Processed          : {len(pending)} images\n"
-        f"Uploaded           : {uploaded} to Roboflow batch '{batch_name}' "
+        f"Rim-scratch upload : {rim_scratch_uploaded} to batch '{batch_name}' "
+        f"(dry_run={dry_run})\n"
+        f"Rim-seg upload     : {rim_seg_uploaded} to batch '{batch_name}' "
         f"(dry_run={dry_run})\n"
         f"Errors             : {errors}\n"
         f"Local log          : {log_path}"
@@ -230,7 +259,10 @@ def run(
     upload_log_to_s3(str(log_path))
 
     _notify(
-        subject=f"[Rim Pipeline] {batch_name} — {uploaded} uploaded",
+        subject=(
+            f"[Rim Pipeline] {batch_name} — "
+            f"{rim_scratch_uploaded} scratch / {rim_seg_uploaded} seg uploaded"
+        ),
         message=summary,
     )
     _stop_self()

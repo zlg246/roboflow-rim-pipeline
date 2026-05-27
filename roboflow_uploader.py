@@ -1,5 +1,9 @@
 """
-roboflow_uploader.py — Upload rim wheel images and polygon annotations to Roboflow.
+roboflow_uploader.py — Upload rim wheel images to Roboflow.
+
+Two parallel projects:
+  rim_scratch  — images + YOLO polygon annotations  (config.RIM_SCRATCH_ROBOFLOW_PROJECT)
+  rim_seg      — raw images, no annotations          (config.RIM_SEG_ROBOFLOW_PROJECT)
 """
 
 import json
@@ -13,21 +17,19 @@ import config
 
 logger = logging.getLogger(__name__)
 
-_rim_rf_project = None
 
+# ── Shared helpers ────────────────────────────────────────────────────
 
-def _get_rim_project():
-    """Lazily connect to the rim scratch Roboflow project and cache the handle."""
-    global _rim_rf_project
-    if _rim_rf_project is None:
-        from roboflow import Roboflow
-        rf              = Roboflow(api_key=config.ROBOFLOW_API_KEY)
-        _rim_rf_project = (
-            rf.workspace(config.ROBOFLOW_WORKSPACE)
-            .project(config.RIM_ROBOFLOW_PROJECT)
-        )
-        logger.info("[roboflow-rim] Connected: %s", _rim_rf_project.name)
-    return _rim_rf_project
+def _derive_image_name(s3_key: str, dealership: str) -> str:
+    """Derive the Roboflow upload filename from an S3 key and dealership name.
+
+    Input:  ``wheel_scanner/SCANNER_A_001608_2026-05-06_09-06-18/left_rear_wheel_org_image.jpg``
+    Output: ``castle_hill_toyota_SCANNER_A_001608_2026-05-06_09-06-18_left_rear_wheel.jpg``
+    """
+    parts       = s3_key.split("/")
+    scan_folder = parts[-2] if len(parts) >= 3 else "unknown"
+    wheel_pos   = parts[-1].replace("_org_image.jpg", "")
+    return f"{dealership}_{scan_folder}_{wheel_pos}.jpg"
 
 
 def _pil_to_bytes(pil_image) -> bytes:
@@ -35,6 +37,25 @@ def _pil_to_bytes(pil_image) -> bytes:
     buf = BytesIO()
     pil_image.save(buf, format="JPEG", quality=config.UPLOAD_JPEG_QUALITY)
     return buf.getvalue()
+
+
+# ── rim_scratch project ───────────────────────────────────────────────
+
+_rim_scratch_rf_project = None
+
+
+def _get_rim_scratch_project():
+    """Lazily connect to the rim_scratch Roboflow project and cache the handle."""
+    global _rim_scratch_rf_project
+    if _rim_scratch_rf_project is None:
+        from roboflow import Roboflow
+        rf                    = Roboflow(api_key=config.ROBOFLOW_API_KEY)
+        _rim_scratch_rf_project = (
+            rf.workspace(config.ROBOFLOW_WORKSPACE)
+            .project(config.RIM_SCRATCH_ROBOFLOW_PROJECT)
+        )
+        logger.info("[roboflow-rim-scratch] Connected: %s", _rim_scratch_rf_project.name)
+    return _rim_scratch_rf_project
 
 
 def _build_coco_json(
@@ -111,7 +132,7 @@ def _build_coco_json(
     return json.dumps(coco, indent=2)
 
 
-def upload_rim(
+def upload_rim_scratch(
     pil_image:   Any,
     s3_key:      str,
     predictions: list[dict[str, Any]],
@@ -121,7 +142,7 @@ def upload_rim(
     dealership:  str,
 ) -> bool:
     """
-    Upload one rim wheel image + polygon predictions to Roboflow.
+    Upload one rim wheel image + polygon predictions to the rim_scratch Roboflow project.
 
     Always uploads — with a COCO JSON annotation file when predictions are
     present, or as an unannotated image when there are none.
@@ -133,10 +154,6 @@ def upload_rim(
     Example::
 
         castle_hill_toyota_SCANNER_A_001608_2026-05-06_09-06-18_left_rear_wheel.jpg
-
-    The ``wheel_position`` is derived from the S3 filename by stripping the
-    ``_org_image.jpg`` suffix (e.g. ``left_rear_wheel_org_image.jpg`` →
-    ``left_rear_wheel``).
 
     Args:
         pil_image:   PIL Image to upload.
@@ -153,18 +170,12 @@ def upload_rim(
     Returns:
         True on success, False on failure.
     """
-    # Derive upload filename from S3 key
-    # e.g. wheel_scanner/SCANNER_A_001608_2026-05-06_09-06-18/left_rear_wheel_org_image.jpg
-    parts       = s3_key.split("/")
-    scan_folder = parts[-2] if len(parts) >= 3 else "unknown"
-    orig_name   = parts[-1]                                    # left_rear_wheel_org_image.jpg
-    wheel_pos   = orig_name.replace("_org_image.jpg", "")     # left_rear_wheel
-    image_name  = f"{dealership}_{scan_folder}_{wheel_pos}.jpg"
+    image_name = _derive_image_name(s3_key, dealership)
 
     tmp_dir = img_tmp = ann_tmp = None
 
     try:
-        project = _get_rim_project()
+        project = _get_rim_scratch_project()
 
         tmp_dir = tempfile.mkdtemp()
         img_tmp = os.path.join(tmp_dir, image_name)
@@ -188,22 +199,97 @@ def upload_rim(
 
         if predictions:
             logger.info(
-                "    [roboflow-rim] ✅ %d polygon(s) uploaded: %s",
+                "    [roboflow-rim-scratch] ✅ %d polygon(s) uploaded: %s",
                 len(predictions), image_name,
             )
         else:
             logger.info(
-                "    [roboflow-rim] 📭 No annotation uploaded: %s", image_name,
+                "    [roboflow-rim-scratch] 📭 No annotation uploaded: %s", image_name,
             )
         return True
 
     except Exception as e:
-        logger.error("    [roboflow-rim] ❌ Upload failed: %s", e)
+        logger.error("    [roboflow-rim-scratch] ❌ Upload failed: %s", e)
         return False
 
     finally:
         for path in (img_tmp, ann_tmp):
             if path and os.path.exists(path):
                 os.unlink(path)
+        if tmp_dir and os.path.exists(tmp_dir):
+            os.rmdir(tmp_dir)
+
+
+# ── rim_seg project ───────────────────────────────────────────────────
+
+_rim_seg_rf_project = None
+
+
+def _get_rim_seg_project():
+    """Lazily connect to the rim_seg Roboflow project and cache the handle."""
+    global _rim_seg_rf_project
+    if _rim_seg_rf_project is None:
+        from roboflow import Roboflow
+        rf               = Roboflow(api_key=config.ROBOFLOW_API_KEY)
+        _rim_seg_rf_project = (
+            rf.workspace(config.ROBOFLOW_WORKSPACE)
+            .project(config.RIM_SEG_ROBOFLOW_PROJECT)
+        )
+        logger.info("[roboflow-rim-seg] Connected: %s", _rim_seg_rf_project.name)
+    return _rim_seg_rf_project
+
+
+def upload_rim_seg(
+    pil_image:  Any,
+    s3_key:     str,
+    batch_name: str,
+    dealership: str,
+) -> bool:
+    """
+    Upload a raw image (no annotations) to the rim_seg Roboflow project.
+
+    All S3 images are uploaded regardless of scratch detections, providing
+    an unannotated image pool in ``config.RIM_SEG_ROBOFLOW_PROJECT``.
+
+    Args:
+        pil_image:  PIL Image to upload.
+        s3_key:     Original S3 key — used to derive the upload filename.
+        batch_name: Roboflow batch name (shared with the rim_scratch upload).
+        dealership: Dealership identifier derived from the bucket name.
+
+    Returns:
+        True on success, False on failure.
+    """
+    image_name = _derive_image_name(s3_key, dealership)
+
+    tmp_dir = img_tmp = None
+
+    try:
+        project = _get_rim_seg_project()
+
+        tmp_dir = tempfile.mkdtemp()
+        img_tmp = os.path.join(tmp_dir, image_name)
+        with open(img_tmp, "wb") as f:
+            f.write(_pil_to_bytes(pil_image))
+
+        project.upload(
+            image_path        = img_tmp,
+            annotation_path   = None,
+            batch_name        = batch_name,
+            tag_names         = [],
+            is_prediction     = False,
+            num_retry_uploads = 3,
+        )
+
+        logger.info("    [roboflow-rim-seg] ✅ Uploaded: %s", image_name)
+        return True
+
+    except Exception as e:
+        logger.error("    [roboflow-rim-seg] ❌ Upload failed: %s", e)
+        return False
+
+    finally:
+        if img_tmp and os.path.exists(img_tmp):
+            os.unlink(img_tmp)
         if tmp_dir and os.path.exists(tmp_dir):
             os.rmdir(tmp_dir)
