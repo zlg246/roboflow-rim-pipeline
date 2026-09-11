@@ -10,17 +10,15 @@
 # ============================================================
 
 # ── CONFIGURE THESE ──────────────────────────────────────────
-$RunDay      = "Wednesday"   # Monday / Tuesday / Wednesday / Thursday / Friday / Saturday / Sunday
-$RunTime     = "17:00"    # 24h format: "17:00" = 5pm  "09:00" = 9am  "08:30" = 8:30am
-$MaxHours    = 48         # Maximum hours the pipeline is allowed to run before being killed
-$S3Bucket    = "prod-castle-hill-toyota"   # bucket passed to --bucket
+$RunDay   = "Wednesday"   # Monday / Tuesday / Wednesday / Thursday / Friday / Saturday / Sunday
+$RunTime  = "17:00"       # 24h format: "17:00" = 5pm  "09:00" = 9am  "08:30" = 8:30am
+$MaxHours = 72            # Maximum hours the task is allowed to run before being killed
 # ─────────────────────────────────────────────────────────────
 
-$TaskName    = "RimScratchPipeline"
+$TaskName    = "RimPipeline"
 $ProjectDir  = "C:\ai-train\roboflow_rim_pipeline"
-$PythonExe   = "python"   # use full path if python is not on PATH, e.g. C:\miniconda3\envs\scanner\python.exe
-$Script      = "$ProjectDir\rim_pipeline.py"
-$Description = "Weekly rim scratch annotation pipeline - runs every $RunDay at $RunTime (max ${MaxHours}h)"
+$BatchScript = "$ProjectDir\run_rim_pipeline.bat"
+$Description = "Weekly rim pipeline (all dealerships) - runs every $RunDay at $RunTime (max ${MaxHours}h)"
 
 # ── Validate inputs ───────────────────────────────────────────
 $ValidDays = @("Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday")
@@ -40,7 +38,7 @@ if ($MaxHours -lt 1 -or $MaxHours -gt 72) {
 Write-Host ""
 Write-Host "  Task name : $TaskName"
 Write-Host "  Project   : $ProjectDir"
-Write-Host "  Bucket    : $S3Bucket"
+Write-Host "  Script    : $BatchScript"
 Write-Host "  Schedule  : Every $RunDay at $RunTime"
 Write-Host "  Max hours : $MaxHours hour(s)"
 Write-Host ""
@@ -52,10 +50,9 @@ if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
 }
 
 # ── Define the action (what to run) ──────────────────────────
-$Args   = "/c `"$PythonExe `"$Script`" --bucket $S3Bucket`""
 $Action = New-ScheduledTaskAction `
     -Execute          "cmd.exe" `
-    -Argument         $Args `
+    -Argument         "/c `"$BatchScript`"" `
     -WorkingDirectory $ProjectDir
 
 # ── Define the trigger ────────────────────────────────────────
@@ -93,9 +90,9 @@ Register-ScheduledTask `
 Write-Host ""
 Write-Host "Task '$TaskName' registered successfully."
 Write-Host "   Runs every $RunDay at $RunTime"
-Write-Host "   Bucket     : $S3Bucket"
-Write-Host "   Max hours  : $MaxHours"
-Write-Host "   Logs       : $ProjectDir\logs\"
+Write-Host "   Script    : $BatchScript"
+Write-Host "   Max hours : $MaxHours"
+Write-Host "   Logs      : $ProjectDir\logs\scheduler\"
 Write-Host ""
 Write-Host "To verify  : Task Scheduler -> Task Scheduler Library -> $TaskName"
 Write-Host "To test now: Right-click the task -> Run"

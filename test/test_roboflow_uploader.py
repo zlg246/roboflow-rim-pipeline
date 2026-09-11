@@ -27,14 +27,37 @@ PRED_OTHER = {
 }
 
 
-# ── upload_rim ────────────────────────────────────────────────────────
+# ── _derive_image_name ────────────────────────────────────────────────
 
-class TestUploadRim:
+class TestDeriveImageName:
+
+    def test_standard_key(self):
+        name = roboflow_uploader._derive_image_name(
+            "wheel_scanner/SCANNER_A_001608_2026-05-06_09-06-18/left_rear_wheel_org_image.jpg",
+            "castle_hill_toyota",
+        )
+        assert name == (
+            "castle_hill_toyota_SCANNER_A_001608_2026-05-06_09-06-18_left_rear_wheel.jpg"
+        )
+
+    def test_different_wheel_position(self):
+        name = roboflow_uploader._derive_image_name(
+            "wheel_scanner/SCANNER_A_001608_2026-05-06_09-06-18/right_front_wheel_org_image.jpg",
+            "chatswood_toyota",
+        )
+        assert name == (
+            "chatswood_toyota_SCANNER_A_001608_2026-05-06_09-06-18_right_front_wheel.jpg"
+        )
+
+
+# ── upload_rim_scratch ────────────────────────────────────────────────
+
+class TestUploadRimScratch:
 
     def test_upload_with_predictions_succeeds(self):
         mock_project = MagicMock()
-        with patch("roboflow_uploader._get_rim_project", return_value=mock_project):
-            ok = roboflow_uploader.upload_rim(
+        with patch("roboflow_uploader._get_rim_scratch_project", return_value=mock_project):
+            ok = roboflow_uploader.upload_rim_scratch(
                 _pil(), _RIM_KEY, [PRED_SCRATCH], 640, 480,
                 "test_batch", "castle_hill_toyota",
             )
@@ -44,8 +67,8 @@ class TestUploadRim:
     def test_upload_without_predictions_succeeds(self):
         """Empty predictions → image uploaded without annotation."""
         mock_project = MagicMock()
-        with patch("roboflow_uploader._get_rim_project", return_value=mock_project):
-            ok = roboflow_uploader.upload_rim(
+        with patch("roboflow_uploader._get_rim_scratch_project", return_value=mock_project):
+            ok = roboflow_uploader.upload_rim_scratch(
                 _pil(), _RIM_KEY, [], 640, 480,
                 "test_batch", "castle_hill_toyota",
             )
@@ -57,8 +80,8 @@ class TestUploadRim:
     def test_correct_image_name_format(self):
         """Filename: dealership_scanfolder_wheelposition.jpg"""
         mock_project = MagicMock()
-        with patch("roboflow_uploader._get_rim_project", return_value=mock_project):
-            roboflow_uploader.upload_rim(
+        with patch("roboflow_uploader._get_rim_scratch_project", return_value=mock_project):
+            roboflow_uploader.upload_rim_scratch(
                 _pil(), _RIM_KEY, [], 640, 480,
                 "test_batch", "castle_hill_toyota",
             )
@@ -69,8 +92,8 @@ class TestUploadRim:
 
     def test_annotation_path_is_json_when_predictions_present(self):
         mock_project = MagicMock()
-        with patch("roboflow_uploader._get_rim_project", return_value=mock_project):
-            roboflow_uploader.upload_rim(
+        with patch("roboflow_uploader._get_rim_scratch_project", return_value=mock_project):
+            roboflow_uploader.upload_rim_scratch(
                 _pil(), _RIM_KEY, [PRED_SCRATCH], 640, 480,
                 "test_batch", "castle_hill_toyota",
             )
@@ -83,8 +106,8 @@ class TestUploadRim:
         for wheel in ("left_rear_wheel", "right_front_wheel", "right_rear_wheel"):
             key = f"wheel_scanner/SCANNER_A_001608_2026-05-06_09-06-18/{wheel}_org_image.jpg"
             mock_project = MagicMock()
-            with patch("roboflow_uploader._get_rim_project", return_value=mock_project):
-                ok = roboflow_uploader.upload_rim(
+            with patch("roboflow_uploader._get_rim_scratch_project", return_value=mock_project):
+                ok = roboflow_uploader.upload_rim_scratch(
                     _pil(), key, [], 640, 480, "batch", "castle_hill_toyota",
                 )
             assert ok is True
@@ -94,10 +117,54 @@ class TestUploadRim:
     def test_returns_false_on_sdk_exception(self):
         mock_project = MagicMock()
         mock_project.upload.side_effect = RuntimeError("API error")
-        with patch("roboflow_uploader._get_rim_project", return_value=mock_project):
-            ok = roboflow_uploader.upload_rim(
+        with patch("roboflow_uploader._get_rim_scratch_project", return_value=mock_project):
+            ok = roboflow_uploader.upload_rim_scratch(
                 _pil(), _RIM_KEY, [PRED_SCRATCH], 640, 480,
                 "test_batch", "castle_hill_toyota",
+            )
+        assert ok is False
+
+
+# ── upload_rim_seg ────────────────────────────────────────────────────
+
+class TestUploadRimSeg:
+
+    def test_upload_succeeds(self):
+        mock_project = MagicMock()
+        with patch("roboflow_uploader._get_rim_seg_project", return_value=mock_project):
+            ok = roboflow_uploader.upload_rim_seg(
+                _pil(), _RIM_KEY, "test_batch", "castle_hill_toyota"
+            )
+        assert ok is True
+        mock_project.upload.assert_called_once()
+
+    def test_no_annotation_path(self):
+        """rim_seg upload must never include an annotation file."""
+        mock_project = MagicMock()
+        with patch("roboflow_uploader._get_rim_seg_project", return_value=mock_project):
+            roboflow_uploader.upload_rim_seg(
+                _pil(), _RIM_KEY, "test_batch", "castle_hill_toyota"
+            )
+        _, kwargs = mock_project.upload.call_args
+        assert kwargs.get("annotation_path") is None
+
+    def test_correct_filename(self):
+        mock_project = MagicMock()
+        with patch("roboflow_uploader._get_rim_seg_project", return_value=mock_project):
+            roboflow_uploader.upload_rim_seg(
+                _pil(), _RIM_KEY, "test_batch", "castle_hill_toyota"
+            )
+        _, kwargs = mock_project.upload.call_args
+        assert kwargs["image_path"].endswith(
+            "castle_hill_toyota_SCANNER_A_001608_2026-05-06_09-06-18_left_rear_wheel.jpg"
+        )
+
+    def test_returns_false_on_sdk_exception(self):
+        mock_project = MagicMock()
+        mock_project.upload.side_effect = RuntimeError("API error")
+        with patch("roboflow_uploader._get_rim_seg_project", return_value=mock_project):
+            ok = roboflow_uploader.upload_rim_seg(
+                _pil(), _RIM_KEY, "test_batch", "castle_hill_toyota"
             )
         assert ok is False
 

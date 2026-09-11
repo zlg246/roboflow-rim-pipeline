@@ -16,8 +16,10 @@ def test_rim_s3_prefix():
     assert config.RIM_S3_ROOT_PREFIX == "wheel_scanner/"
 
 
-def test_rim_roboflow_project_default():
-    assert config.RIM_ROBOFLOW_PROJECT == "test_project-e4bw5"
+def test_rim_roboflow_projects_set():
+    """Both parallel Roboflow project IDs must be non-empty."""
+    assert config.RIM_SCRATCH_ROBOFLOW_PROJECT, "RIM_SCRATCH_ROBOFLOW_PROJECT missing"
+    assert config.RIM_SEG_ROBOFLOW_PROJECT,     "RIM_SEG_ROBOFLOW_PROJECT missing"
 
 
 def test_log_bucket_differs_from_prod():

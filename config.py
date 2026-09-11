@@ -59,7 +59,14 @@ POLYGON_SIMPLIFY_EPSILON = float(os.environ.get("POLYGON_SIMPLIFY_EPSILON", "2.0
 # ── Roboflow ─────────────────────────────────────────────────────────
 ROBOFLOW_API_KEY     = os.environ.get("ROBOFLOW_API_KEY", "")
 ROBOFLOW_WORKSPACE   = os.environ.get("ROBOFLOW_WORKSPACE", "your-workspace")
-RIM_ROBOFLOW_PROJECT = os.environ.get("RIM_ROBOFLOW_PROJECT", "test_project-e4bw5")
+# Rim scratch project: images uploaded with YOLO polygon annotations.
+RIM_SCRATCH_ROBOFLOW_PROJECT = os.environ.get(
+    "RIM_SCRATCH_ROBOFLOW_PROJECT", "test_project-e4bw5"
+)
+# Rim seg project: all images uploaded without annotations.
+RIM_SEG_ROBOFLOW_PROJECT = os.environ.get(
+    "RIM_SEG_ROBOFLOW_PROJECT", "candidates_test-eicif"
+)
 
 # ── Upload ───────────────────────────────────────────────────────────
 # JPEG compression quality used when saving images for upload (0–95).
